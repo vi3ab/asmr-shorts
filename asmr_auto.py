@@ -1,0 +1,109 @@
+import os, json, shutil, subprocess, time
+from google import genai
+from gradio_client import Client
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+
+GEMINI_MODEL = "gemini-2.5-flash"
+HF_SPACE = "Lightricks/ltx-video-distilled"
+HF_API_NAME = "/generate"
+N_SCENES = 6
+OUT = "work"
+SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+HISTORY = "history.json"
+
+
+def get_idea():
+    used = json.load(open(HISTORY)) if os.path.exists(HISTORY) else []
+    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    ask = f"""أريد فكرة جديدة ومبتكرة لفيديو AI ASMR طوله 30 ثانية (YouTube Short، عمودي 9:16).
+الفكرة موجودة في مكان غير مألوف. تجنب هذه الأفكار السابقة: {used[-30:]}
+أرجع JSON فقط بدون أي شرح بهذا الشكل:
+{{"idea":"وصف قصير","title":"عنوان جذاب بالإنجليزي","description":"وصف قصير","tags":["asmr","ai"],
+"scenes":["{N_SCENES} prompts بالإنجليزي، كل واحد مشهد 5 ثواني بنفس الأسلوب البصري والعناصر، ASMR close-up, satisfying, macro"]}}"""
+    r = client.models.generate_content(model=GEMINI_MODEL, contents=ask)
+    txt = r.text.replace("```json", "").replace("```", "").strip()
+    data = json.loads(txt)
+    used.append(data["idea"])
+    json.dump(used, open(HISTORY, "w"), ensure_ascii=False)
+    return data
+
+
+def gen_clips(scenes):
+    os.makedirs(OUT, exist_ok=True)
+    client = Client(HF_SPACE, hf_token=os.environ.get("HF_TOKEN"))
+    paths = []
+    for i, p in enumerate(scenes):
+        for attempt in range(3):
+            try:
+                res = client.predict(prompt=p, api_name=HF_API_NAME)
+                src = res[0] if isinstance(res, (list, tuple)) else res
+                if isinstance(src, dict):
+                    src = src.get("video") or src.get("path")
+                dst = f"{OUT}/clip{i}.mp4"
+                shutil.copy(src, dst)
+                paths.append(dst)
+                break
+            except Exception as e:
+                print(f"scene {i} attempt {attempt+1} failed: {e}")
+                time.sleep(20)
+    if len(paths) < 2:
+        raise RuntimeError("Too few clips generated")
+    return paths
+
+
+def merge(paths):
+    lst = f"{OUT}/list.txt"
+    with open(lst, "w") as f:
+        for p in paths:
+            f.write(f"file '{os.path.abspath(p)}'\n")
+    out = f"{OUT}/final.mp4"
+    vf = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30"
+    subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", lst,
+                    "-vf", vf, "-t", "59", "-c:v", "libx264",
+                    "-pix_fmt", "yuv420p", "-an", out], check=True)
+    return out
+
+
+def yt_service():
+    creds = None
+    if os.path.exists("token.json"):
+        creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file("client_secret.json", SCOPES)
+            creds = flow.run_local_server(port=0)
+        open("token.json", "w").write(creds.to_json())
+    return build("youtube", "v3", credentials=creds)
+
+
+def upload(video, d):
+    yt = yt_service()
+    body = {
+        "snippet": {
+            "title": (d["title"] + " #Shorts")[:100],
+            "description": d["description"] + "\n#Shorts #ASMR #AI",
+            "tags": d.get("tags", []) + ["Shorts"],
+            "categoryId": "24",
+        },
+        "status": {"privacyStatus": "public", "selfDeclaredMadeForKids": False},
+    }
+    req = yt.videos().insert(part="snippet,status", body=body,
+                             media_body=MediaFileUpload(video, resumable=True))
+    resp = None
+    while resp is None:
+        _, resp = req.next_chunk()
+    print("Uploaded: https://youtube.com/shorts/" + resp["id"])
+
+
+if __name__ == "__main__":
+    data = get_idea()
+    print("Idea:", data["idea"])
+    clips = gen_clips(data["scenes"])
+    final = merge(clips)
+    upload(final, data)

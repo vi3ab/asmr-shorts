@@ -33,9 +33,24 @@ jobs:
           pip install -r requirements.txt
 
       - name: Write credentials
+        env:
+          RT: ${{ secrets.YT_REFRESH_TOKEN }}
+          CID: ${{ secrets.YT_CLIENT_ID }}
+          CS: ${{ secrets.YT_CLIENT_SECRET }}
         run: |
-          echo '${{ secrets.CLIENT_SECRET_JSON }}' > client_secret.json
-          echo '${{ secrets.TOKEN_JSON }}' > token.json
+          python - <<'PY'
+          import json, os
+          d = {
+            "token": "x",
+            "refresh_token": os.environ["RT"],
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "client_id": os.environ["CID"],
+            "client_secret": os.environ["CS"],
+            "scopes": ["https://www.googleapis.com/auth/youtube.upload"],
+            "expiry": "2000-01-01T00:00:00Z",
+          }
+          json.dump(d, open("token.json", "w"))
+          PY
 
       - name: Run
         env:

@@ -3,11 +3,10 @@ from google import genai
 from gradio_client import Client
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-from google_auth_oauthlib.flow import InstalledAppFlow
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.8-flash"
 HF_SPACE = "Lightricks/ltx-video-distilled"
 HF_API_NAME = "/generate"
 N_SCENES = 6
@@ -69,16 +68,9 @@ def merge(paths):
 
 
 def yt_service():
-    creds = None
-    if os.path.exists("token.json"):
-        creds = Credentials.from_authorized_user_file("token.json", SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file("client_secret.json", SCOPES)
-            creds = flow.run_local_server(port=0)
-        open("token.json", "w").write(creds.to_json())
+    creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+    if not creds.valid:
+        creds.refresh(Request())
     return build("youtube", "v3", credentials=creds)
 
 

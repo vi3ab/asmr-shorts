@@ -22,9 +22,27 @@ def parse_json(text):
     return json.loads(text[s:e + 1])
 
 
+def candidate_models(client):
+    names = [GEMINI_MODEL]
+    try:
+        for m in client.models.list():
+            n = (m.name or "").replace("models/", "")
+            acts = getattr(m, "supported_actions", None) or []
+            if "flash" in n and (not acts or "generateContent" in acts):
+                if not any(k in n for k in ("image", "tts", "live", "audio", "embedding", "native")):
+                    if n not in names:
+                        names.append(n)
+    except Exception as e:
+        print("could not list models:", e)
+    names = names[:5]
+    print("Models to try:", names)
+    return names
+
+
 def get_idea():
     used = json.load(open(HISTORY)) if os.path.exists(HISTORY) else []
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    models = candidate_models(client)
     ask = (
         "Give me a new, creative idea for a 30-second AI ASMR YouTube Short "
         "(vertical 9:16). The idea should be set in an unusual, unexpected place. "
@@ -36,9 +54,10 @@ def get_idea():
         'with the same visual style and elements, ASMR close-up, satisfying, macro"]}'
     )
     data = None
-    for attempt in range(6):
+    for attempt in range(15):
+        model = models[attempt % len(models)]
         try:
-            r = client.models.generate_content(model=GEMINI_MODEL, contents=ask)
+            r = client.models.generate_content(model=model, contents=ask)
             data = parse_json(r.text or "")
             scenes = []
             for s in data.get("scenes", []):
@@ -51,11 +70,12 @@ def get_idea():
             data.setdefault("title", "Satisfying AI ASMR")
             data.setdefault("description", "")
             data.setdefault("idea", data["title"])
+            print("Idea generated with model:", model)
             break
         except Exception as e:
-            print(f"gemini attempt {attempt + 1} failed: {e}")
+            print(f"gemini attempt {attempt + 1} ({model}) failed: {str(e)[:200]}")
             data = None
-            time.sleep(30)
+            time.sleep(20)
     if data is None:
         raise RuntimeError("Gemini failed after retries")
     used.append(data["idea"])
